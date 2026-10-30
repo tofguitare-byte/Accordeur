@@ -234,7 +234,8 @@ body{margin:0}
   function nameOf(m) { return (st.fr ? NAMES_FR : NAMES_EN)[((m % 12) + 12) % 12]; }
   function octOf(m) { return Math.floor(m / 12) - 1; }
   function fmtHz(f) { return f.toFixed(f < 100 ? 2 : 1).replace('.', ',') + ' Hz'; }
-  function noteHTML(m) { return nameOf(m) + '<span class="oct">' + octOf(m) + '</span>'; }
+  // octave number only in chromatic mode; with a string list the "corde N" label is clearer
+  function noteHTML(m) { return nameOf(m) + (inst().s.length ? '' : '<span class="oct">' + octOf(m) + '</span>'); }
 
   // ticks every 5 cents from -50 to +50
   (function () {
@@ -380,12 +381,13 @@ body{margin:0}
     for (tau = 1; tau <= tauMax; tau++) { run += d[tau]; cm[tau] = run ? d[tau] * tau / run : 1; }
     var best = -1;
     for (tau = tauMin; tau < tauMax; tau++) {
-      if (cm[tau] < 0.13) {
+      if (cm[tau] < 0.2) {
         while (tau + 1 < tauMax && cm[tau + 1] < cm[tau]) tau++;
         best = tau; break;
       }
     }
     if (best < 0) return -1;
+    if (best >= tauMax - 1) return -1;
     var a = cm[best - 1], b = cm[best], c = cm[best + 1], den = a + c - 2 * b;
     var shift = den ? (a - c) / (2 * den) : 0;
     return sr / (best + shift);
@@ -405,7 +407,7 @@ body{margin:0}
     for (k = 0; k < buf.length; k++) rms += buf[k] * buf[k];
     rms = Math.sqrt(rms / buf.length);
     var now = Date.now(), f = -1;
-    if (rms > 0.008) { var r = range(); f = yin(buf, ac.sampleRate, r[0], r[1]); }
+    if (rms > 0.0012) { var r = range(); f = yin(buf, ac.sampleRate, r[0], r[1]); }
     if (f > 0) {
       lastHeard = now;
       hist.push(f); if (hist.length > 3) hist.shift();
@@ -420,11 +422,18 @@ body{margin:0}
   function showPitch(f) {
     var i = inst(), m, tf;
     if (i.s.length) {
-      if (st.auto) {
-        var bi = 0, bd = 1e9;
-        i.s.forEach(function (s, idx) { var dd = Math.abs(Math.log(f / freqOf(s[0]))); if (dd < bd) { bd = dd; bi = idx; } });
-        st.target = bi;
-      }
+      // Octave errors are common on real strings (esp. low B on 5-string bass, B on guitar):
+      // also try f/2 and f*2 and keep whichever lands closest to a string, with a small penalty.
+      var bi = -1, bc = 1e9, bf = f;
+      i.s.forEach(function (s, idx) {
+        if (!st.auto && idx !== st.target) return;
+        [1, 0.5, 2].forEach(function (mul) {
+          var fe = f * mul, cc = Math.abs(1200 * Math.log(fe / freqOf(s[0])) / Math.LN2) + (mul === 1 ? 0 : 40);
+          if (cc < bc) { bc = cc; bi = idx; bf = fe; }
+        });
+      });
+      if (bi < 0) return;
+      st.target = bi; f = bf;
       m = i.s[st.target][0]; tf = freqOf(m);
     } else {
       m = Math.round(69 + 12 * Math.log(f / st.a4) / Math.LN2); tf = freqOf(m);
@@ -460,7 +469,7 @@ body{margin:0}
       return;
     }
     var a = ctx(); if (!a) return;
-    md.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }).then(function (s) {
+    md.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } }).then(function (s) {
       stream = s; st.micOn = true;
       src = a.createMediaStreamSource(s);
       analyser = a.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0;
